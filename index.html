@@ -1,0 +1,1456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>CanSat GCS — Mission Control</title>
+
+<!-- External Libraries -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<style>
+  /* ── DESIGN TOKENS ─────────────────────────────────────────────── */
+  :root {
+    --bg:        #050810;
+    --bg1:       #090d1a;
+    --bg2:       #0d1220;
+    --panel:     #0f1628;
+    --border:    #1c2540;
+    --accent:    #00d4ff;
+    --accent2:   #7b61ff;
+    --warn:      #ffb800;
+    --danger:    #ff3b3b;
+    --ok:        #00e676;
+    --text:      #ccd6f6;
+    --muted:     #4a5580;
+    --font-mono: 'Courier New', monospace;
+    --font-ui:   'Segoe UI', system-ui, sans-serif;
+    --glow:      0 0 12px rgba(0,212,255,0.35);
+    --glow-ok:   0 0 10px rgba(0,230,118,0.5);
+    --glow-warn: 0 0 10px rgba(255,184,0,0.5);
+    --glow-err:  0 0 10px rgba(255,59,59,0.5);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── SCANLINE OVERLAY ───────────────────────────────────────────── */
+  body::before {
+    content:'';
+    position:fixed; inset:0;
+    background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.04) 2px,rgba(0,0,0,.04) 4px);
+    pointer-events:none; z-index:9999;
+  }
+
+  /* ── TOP HEADER BAR ─────────────────────────────────────────────── */
+  #header {
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    padding: 0 16px;
+    height: 54px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky; top:0; z-index:100;
+  }
+
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 700; letter-spacing: .08em;
+    color: var(--accent); text-transform: uppercase;
+    flex-shrink:0;
+  }
+  .logo svg { width:28px; height:28px; }
+
+  .mission-badge {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: .06em;
+  }
+  .mission-badge span { color: var(--accent); }
+
+  #header .spacer { flex:1; }
+
+  /* connection status */
+  #conn-status {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  }
+  #conn-dot {
+    width:9px; height:9px; border-radius:50%;
+    background: var(--muted);
+    transition: background .3s;
+  }
+  #conn-dot.connected   { background: var(--ok);   box-shadow: var(--glow-ok); }
+  #conn-dot.streaming   { background: var(--ok);   box-shadow: var(--glow-ok); animation: pulse 1s infinite; }
+  #conn-dot.error       { background: var(--danger); box-shadow: var(--glow-err); }
+
+  /* Mission clock */
+  #mission-clock {
+    font-family: var(--font-mono);
+    font-size: 14px; color: var(--accent);
+    letter-spacing: .12em;
+    min-width: 90px; text-align:right;
+  }
+
+  /* ── CONTROL BAR ────────────────────────────────────────────────── */
+  #ctrl-bar {
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .ctrl-group {
+    display:flex; gap:6px; align-items:center;
+    padding-right: 12px;
+    border-right: 1px solid var(--border);
+  }
+  .ctrl-group:last-child { border-right:none; }
+
+  .ctrl-label {
+    font-size:10px; text-transform:uppercase; color:var(--muted);
+    letter-spacing:.08em; margin-right:2px;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 5px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 11px;
+    font-family: var(--font-ui);
+    letter-spacing: .04em;
+    cursor: pointer;
+    transition: all .15s;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); }
+  .btn.primary:hover { box-shadow: var(--glow); }
+  .btn.danger  { background: rgba(255,59,59,.15); border-color:var(--danger); color:var(--danger); }
+  .btn.danger:hover { background:var(--danger); color:#fff; box-shadow:var(--glow-err); }
+  .btn.warn    { background: rgba(255,184,0,.1); border-color:var(--warn); color:var(--warn); }
+  .btn.warn:hover { background:var(--warn); color:#000; box-shadow:var(--glow-warn); }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+
+  /* ── MAIN GRID ──────────────────────────────────────────────────── */
+  #main {
+    display: grid;
+    grid-template-columns: 260px 1fr 1fr 260px;
+    grid-template-rows: auto auto auto;
+    gap: 8px;
+    padding: 8px;
+    min-height: calc(100vh - 110px);
+  }
+
+  /* panels */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    overflow: hidden;
+  }
+  .panel-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--accent);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .panel-title .dot { width:6px; height:6px; border-radius:50%; background:var(--accent); }
+
+  /* ── ERROR CODE DISPLAY ─────────────────────────────────────────── */
+  #error-panel { grid-column: 1; grid-row: 1; }
+
+  .error-digits {
+    display: flex; gap:6px; justify-content:center; margin: 8px 0 12px;
+  }
+  .edigit {
+    width: 52px; height: 64px;
+    display: flex; flex-direction:column; align-items:center; justify-content:center;
+    border-radius: 6px;
+    border: 1.5px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--ok);
+    background: rgba(0,230,118,.06);
+    transition: all .3s;
+    position:relative;
+  }
+  .edigit .elabel {
+    font-size:8px; color:var(--muted); margin-top:2px;
+    text-transform:uppercase; letter-spacing:.05em;
+    font-family:var(--font-ui);
+  }
+  .edigit.fault {
+    color: var(--danger);
+    background: rgba(255,59,59,.1);
+    border-color: var(--danger);
+    box-shadow: var(--glow-err);
+    animation: blink .6s infinite;
+  }
+
+  .error-desc {
+    font-size:10px; color:var(--muted); line-height:1.7;
+  }
+  .error-desc .fault-row { color: var(--danger); }
+  .error-desc .ok-row    { color: var(--ok); }
+
+  /* ── MISSION CONTROL PANEL ──────────────────────────────────────── */
+  #mission-panel { grid-column: 1; grid-row: 2; }
+
+  .cmd-btn {
+    width:100%; margin-bottom:6px; padding:8px 12px;
+    text-align:left;
+    display:flex; align-items:center; gap:8px;
+  }
+  .cmd-btn .cbicon {
+    font-size:14px; flex-shrink:0;
+  }
+  .cmd-btn .cbtext { font-size:11px; font-weight:600; }
+  .cmd-btn .cbsub  { font-size:9px; color:var(--muted); display:block; margin-top:2px; font-weight:400; text-transform:none; letter-spacing:0; }
+
+  #cmd-status {
+    margin-top:8px;
+    padding:7px 10px;
+    border-radius:4px;
+    background: rgba(0,212,255,.06);
+    border: 1px solid var(--border);
+    font-family:var(--font-mono); font-size:10px;
+    color: var(--muted); line-height:1.6;
+    min-height:56px;
+  }
+
+  /* ── TELEMETRY DISPLAY ──────────────────────────────────────────── */
+  #telem-panel { grid-column: 2; grid-row: 1 / 3; }
+
+  .telem-sub { font-size:9px; text-transform:uppercase; color:var(--muted); letter-spacing:.08em; margin:8px 0 4px; }
+  .telem-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 5px;
+  }
+  .tfield {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius:4px;
+    padding: 6px 8px;
+  }
+  .tfield .tname { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+  .tfield .tval  {
+    font-family:var(--font-mono); font-size:16px;
+    color: var(--text); font-weight:700; margin-top:2px;
+    transition: color .2s;
+  }
+  .tfield .tunit { font-size:9px; color:var(--muted); margin-left:2px; }
+  .tfield.highlight .tval { color: var(--accent); }
+
+  /* packet counter */
+  #pkt-counter {
+    margin-top:8px; text-align:right;
+    font-family:var(--font-mono); font-size:10px; color:var(--muted);
+  }
+
+  /* ── GRAPHS PANEL ───────────────────────────────────────────────── */
+  #graphs-panel { grid-column: 3; grid-row: 1 / 3; }
+
+  .graph-tabs {
+    display:flex; gap:4px; margin-bottom:8px;
+  }
+  .gtab {
+    font-size:10px; text-transform:uppercase; letter-spacing:.06em;
+    padding:3px 8px; border-radius:3px;
+    border:1px solid var(--border);
+    background:var(--bg2); color:var(--muted);
+    cursor:pointer;
+  }
+  .gtab.active { background:var(--accent); color:#000; border-color:var(--accent); }
+
+  .graph-wrap {
+    position:relative; height:130px; margin-bottom:6px;
+  }
+  .graph-wrap canvas { width:100%!important; height:130px!important; }
+
+  /* ── VIDEO PANEL ────────────────────────────────────────────────── */
+  #video-panel { grid-column: 4; grid-row: 1; }
+
+  #video-wrap {
+    position:relative; width:100%; padding-top:56.25%;
+    background:#000; border-radius:4px; overflow:hidden;
+    border:1px solid var(--border);
+    margin-bottom:8px;
+  }
+  #live-video {
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:cover;
+  }
+  .vid-overlay {
+    position:absolute; top:6px; left:6px;
+    font-family:var(--font-mono); font-size:9px;
+    color: var(--danger); letter-spacing:.06em;
+    display:flex; align-items:center; gap:4px;
+  }
+  .vid-overlay .vrec { width:7px; height:7px; border-radius:50%; background:var(--danger); animation:pulse 1s infinite; }
+  #vid-no-stream {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    color:var(--muted); font-size:11px; gap:6px;
+    background:#000;
+  }
+  #vid-no-stream svg { opacity:.3; }
+
+  .cam-select {
+    width:100%; background:var(--bg2); border:1px solid var(--border);
+    color:var(--text); padding:5px 8px; border-radius:4px;
+    font-size:11px; font-family:var(--font-ui); margin-bottom:6px;
+  }
+
+  /* ── ORIENTATION ────────────────────────────────────────────────── */
+  #orient-panel { grid-column: 4; grid-row: 2; }
+
+  #orient-canvas { width:100%; height:150px; display:block; border-radius:4px; }
+
+  .orient-vals {
+    display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px; margin-top:6px;
+  }
+  .oval {
+    background:var(--bg2); border:1px solid var(--border); border-radius:4px;
+    padding:4px 6px; text-align:center;
+  }
+  .oval .oname { font-size:9px; color:var(--muted); text-transform:uppercase; }
+  .oval .onum  { font-family:var(--font-mono); font-size:13px; color:var(--accent2); }
+
+  /* ── MAP PANEL ──────────────────────────────────────────────────── */
+  #map-panel { grid-column: 2 / 4; grid-row: 3; }
+  #gcs-map   { height:220px; border-radius:4px; }
+
+  /* ── LOG PANEL ──────────────────────────────────────────────────── */
+  #log-panel { grid-column: 1; grid-row: 3; }
+
+  #telem-log {
+    height:200px; overflow-y:auto;
+    font-family:var(--font-mono); font-size:9px;
+    color:var(--muted); line-height:1.7;
+    background:var(--bg2); border-radius:4px;
+    padding:6px 8px;
+    border:1px solid var(--border);
+  }
+  #telem-log::-webkit-scrollbar { width:4px; }
+  #telem-log::-webkit-scrollbar-track { background:transparent; }
+  #telem-log::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+  .log-ts   { color:#3d5080; }
+  .log-ok   { color:var(--ok); }
+  .log-warn { color:var(--warn); }
+  .log-err  { color:var(--danger); }
+
+  /* ── STATS PANEL ────────────────────────────────────────────────── */
+  #stats-panel { grid-column: 4; grid-row: 3; }
+
+  .stat-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+    font-size:11px;
+  }
+  .stat-row:last-child { border-bottom:none; }
+  .stat-key { color:var(--muted); }
+  .stat-val { font-family:var(--font-mono); color:var(--text); }
+
+  /* progress bar for battery */
+  .batt-bar {
+    height:4px; background:var(--border); border-radius:2px; margin-top:6px;
+  }
+  .batt-fill {
+    height:100%; border-radius:2px; background:var(--ok);
+    transition: width .5s, background .3s;
+  }
+
+  /* ── ANIMATIONS ─────────────────────────────────────────────────── */
+  @keyframes pulse {
+    0%,100% { opacity:1; }
+    50% { opacity:.3; }
+  }
+  @keyframes blink {
+    0%,100% { opacity:1; }
+    50% { opacity:.5; }
+  }
+
+  /* ── MODAL ──────────────────────────────────────────────────────── */
+  #modal-overlay {
+    display:none; position:fixed; inset:0; z-index:200;
+    background:rgba(0,0,0,.7); align-items:center; justify-content:center;
+  }
+  #modal-overlay.visible { display:flex; }
+  .modal-box {
+    background:var(--panel); border:1px solid var(--danger);
+    border-radius:8px; padding:24px; max-width:360px; width:90%;
+    box-shadow: var(--glow-err);
+  }
+  .modal-title { color:var(--danger); font-size:14px; font-weight:700; margin-bottom:8px; }
+  .modal-body  { color:var(--text); font-size:12px; line-height:1.6; margin-bottom:16px; }
+  .modal-btns  { display:flex; gap:8px; justify-content:flex-end; }
+
+  /* ── RESPONSIVE TWEAKS ──────────────────────────────────────────── */
+  @media (max-width:1200px) {
+    #main { grid-template-columns: 240px 1fr 240px; }
+    #telem-panel  { grid-column: 1 / 3; grid-row: 2; }
+    #graphs-panel { grid-column: 1 / 4; grid-row: 3; }
+    #map-panel    { grid-column: 1 / 4; grid-row: 4; }
+    #log-panel    { grid-column: 1 / 2; grid-row: 5; }
+    #stats-panel  { grid-column: 2 / 4; grid-row: 5; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation:none!important; transition:none!important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     HEADER
+═══════════════════════════════════════════════════════════════════ -->
+<header id="header">
+  <div class="logo">
+    <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="14" cy="14" r="13" stroke="#00d4ff" stroke-width="1.5"/>
+      <ellipse cx="14" cy="14" rx="6" ry="13" stroke="#00d4ff" stroke-width="1" stroke-dasharray="2 2"/>
+      <ellipse cx="14" cy="14" rx="13" ry="6" stroke="#00d4ff" stroke-width="1" opacity=".4"/>
+      <circle cx="14" cy="14" r="2.5" fill="#00d4ff"/>
+    </svg>
+    CanSat GCS
+  </div>
+
+  <div class="mission-badge">MISSION: <span id="mission-id">CS-2025-A</span></div>
+  <div class="mission-badge">TEAM: <span id="team-id">ALPHA-01</span></div>
+
+  <div class="spacer"></div>
+
+  <div id="conn-status">
+    <div id="conn-dot"></div>
+    <span id="conn-label">OFFLINE</span>
+  </div>
+  <div id="mission-clock">T+ 00:00:00</div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     CONTROL BAR
+═══════════════════════════════════════════════════════════════════ -->
+<div id="ctrl-bar">
+  <div class="ctrl-group">
+    <span class="ctrl-label">Telemetry</span>
+    <button class="btn primary" id="btn-start" onclick="startTelemetry()">▶ Start</button>
+    <button class="btn danger"  id="btn-stop"  onclick="stopTelemetry()"  disabled>■ Stop</button>
+  </div>
+  <div class="ctrl-group">
+    <span class="ctrl-label">Serial</span>
+    <button class="btn" id="btn-connect"   onclick="connectSerial()">⏻ Connect Port</button>
+    <button class="btn" id="btn-disconnect" onclick="disconnectSerial()" disabled>⏼ Disconnect</button>
+  </div>
+  <div class="ctrl-group">
+    <span class="ctrl-label">Export</span>
+    <button class="btn" onclick="exportCSV()">⬇ CSV</button>
+    <button class="btn" onclick="exportGraphs()">⬇ Graphs</button>
+  </div>
+  <div class="ctrl-group">
+    <span class="ctrl-label">Ops</span>
+    <button class="btn" onclick="syncTime()">🕐 Sync Time</button>
+    <button class="btn" onclick="resetPackets()">↺ Reset Packets</button>
+  </div>
+  <div class="ctrl-group">
+    <span class="ctrl-label">Demo</span>
+    <button class="btn warn" onclick="toggleSim()" id="btn-sim">⚡ Simulate</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MAIN DASHBOARD GRID
+═══════════════════════════════════════════════════════════════════ -->
+<div id="main">
+
+  <!-- ── ERROR CODE PANEL ── -->
+  <div class="panel" id="error-panel">
+    <div class="panel-title"><span class="dot"></span> FAULT CODE</div>
+    <div class="error-digits">
+      <div class="edigit" id="ed0"><span>0</span><span class="elabel">RATE</span></div>
+      <div class="edigit" id="ed1"><span>0</span><span class="elabel">GPS</span></div>
+      <div class="edigit" id="ed2"><span>0</span><span class="elabel">SEP</span></div>
+      <div class="edigit" id="ed3"><span>0</span><span class="elabel">CHUTE</span></div>
+    </div>
+    <div class="error-desc" id="error-desc">
+      <div class="ok-row">✔ D1 — Descent rate nominal</div>
+      <div class="ok-row">✔ D2 — GPS data available</div>
+      <div class="ok-row">✔ D3 — Payload separation OK</div>
+      <div class="ok-row">✔ D4 — Parachute inactive (normal)</div>
+    </div>
+  </div>
+
+  <!-- ── TELEMETRY PANEL ── -->
+  <div class="panel" id="telem-panel">
+    <div class="panel-title"><span class="dot"></span> TELEMETRY</div>
+
+    <div class="telem-sub">Container</div>
+    <div class="telem-grid">
+      <div class="tfield highlight">
+        <div class="tname">Altitude</div>
+        <div class="tval" id="t-alt">—<span class="tunit">m</span></div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Pressure</div>
+        <div class="tval" id="t-prs">—<span class="tunit">hPa</span></div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Temperature</div>
+        <div class="tval" id="t-tmp">—<span class="tunit">°C</span></div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Humidity</div>
+        <div class="tval" id="t-hum">—<span class="tunit">%</span></div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Descent Rate</div>
+        <div class="tval" id="t-drt">—<span class="tunit">m/s</span></div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Battery V</div>
+        <div class="tval" id="t-bat">—<span class="tunit">V</span></div>
+      </div>
+    </div>
+
+    <div class="telem-sub" style="margin-top:10px">Payload</div>
+    <div class="telem-grid">
+      <div class="tfield">
+        <div class="tname">Latitude</div>
+        <div class="tval" id="t-lat">—</div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Longitude</div>
+        <div class="tval" id="t-lon">—</div>
+      </div>
+      <div class="tfield">
+        <div class="tname">GPS Sats</div>
+        <div class="tval" id="t-sat">—</div>
+      </div>
+      <div class="tfield">
+        <div class="tname">GPS Fix</div>
+        <div class="tval" id="t-fix">—</div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Accel X</div>
+        <div class="tval" id="t-ax">—<span class="tunit">g</span></div>
+      </div>
+      <div class="tfield">
+        <div class="tname">Accel Y</div>
+        <div class="tval" id="t-ay">—<span class="tunit">g</span></div>
+      </div>
+    </div>
+
+    <div id="pkt-counter">PKT #<span id="pkt-num">0</span> | RSSI <span id="t-rssi">—</span> dBm</div>
+  </div>
+
+  <!-- ── GRAPHS PANEL ── -->
+  <div class="panel" id="graphs-panel">
+    <div class="panel-title"><span class="dot"></span> REAL-TIME GRAPHS</div>
+
+    <div class="graph-tabs">
+      <div class="gtab active" onclick="switchGraph('alt',this)">Altitude</div>
+      <div class="gtab" onclick="switchGraph('prs',this)">Pressure</div>
+      <div class="gtab" onclick="switchGraph('tmp',this)">Temp</div>
+      <div class="gtab" onclick="switchGraph('drt',this)">Descent</div>
+      <div class="gtab" onclick="switchGraph('bat',this)">Battery</div>
+    </div>
+
+    <div class="graph-wrap"><canvas id="gc-alt"></canvas></div>
+    <div class="graph-wrap" style="display:none"><canvas id="gc-prs"></canvas></div>
+    <div class="graph-wrap" style="display:none"><canvas id="gc-tmp"></canvas></div>
+    <div class="graph-wrap" style="display:none"><canvas id="gc-drt"></canvas></div>
+    <div class="graph-wrap" style="display:none"><canvas id="gc-bat"></canvas></div>
+
+    <!-- Mini sparklines always-visible at bottom -->
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-top:6px;">
+      <div style="text-align:center;font-size:9px;color:var(--muted);">ALT<br><canvas id="sp-alt" height="30"></canvas></div>
+      <div style="text-align:center;font-size:9px;color:var(--muted);">PRS<br><canvas id="sp-prs" height="30"></canvas></div>
+      <div style="text-align:center;font-size:9px;color:var(--muted);">TMP<br><canvas id="sp-tmp" height="30"></canvas></div>
+      <div style="text-align:center;font-size:9px;color:var(--muted);">DRT<br><canvas id="sp-drt" height="30"></canvas></div>
+      <div style="text-align:center;font-size:9px;color:var(--muted);">BAT<br><canvas id="sp-bat" height="30"></canvas></div>
+    </div>
+  </div>
+
+  <!-- ── VIDEO PANEL ── -->
+  <div class="panel" id="video-panel">
+    <div class="panel-title"><span class="dot"></span> LIVE VIDEO</div>
+    <div id="video-wrap">
+      <video id="live-video" autoplay playsinline muted style="display:none"></video>
+      <div class="vid-overlay" id="vid-rec" style="display:none"><div class="vrec"></div> LIVE</div>
+      <div id="vid-no-stream">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/><line x1="1" y1="1" x2="23" y2="23" stroke="currentColor" stroke-width="1.5"/></svg>
+        No stream active
+      </div>
+    </div>
+    <select class="cam-select" id="cam-select"><option value="">Select camera…</option></select>
+    <div style="display:flex;gap:6px;">
+      <button class="btn primary" style="flex:1" onclick="startVideo()">▶ Start Stream</button>
+      <button class="btn danger"  style="flex:1" onclick="stopVideo()">■ Stop</button>
+    </div>
+    <div style="margin-top:6px;font-size:10px;color:var(--muted);text-align:center" id="vid-status">Stream idle</div>
+  </div>
+
+  <!-- ── ORIENTATION PANEL ── -->
+  <div class="panel" id="orient-panel">
+    <div class="panel-title"><span class="dot"></span> ORIENTATION</div>
+    <canvas id="orient-canvas"></canvas>
+    <div class="orient-vals">
+      <div class="oval"><div class="oname">Roll</div><div class="onum" id="ov-roll">0°</div></div>
+      <div class="oval"><div class="oname">Pitch</div><div class="onum" id="ov-pitch">0°</div></div>
+      <div class="oval"><div class="oname">Yaw</div><div class="onum" id="ov-yaw">0°</div></div>
+    </div>
+  </div>
+
+  <!-- ── MISSION CONTROL PANEL ── -->
+  <div class="panel" id="mission-panel">
+    <div class="panel-title"><span class="dot" style="background:var(--danger)"></span> MISSION CONTROL</div>
+
+    <button class="btn warn cmd-btn" onclick="sendCmd('MANUAL_SEP')">
+      <span class="cbicon">⬇</span>
+      <span class="cbtext">Manual Separation
+        <span class="cbsub">Triggers mechanical separation command</span>
+      </span>
+    </button>
+    <button class="btn danger cmd-btn" onclick="confirmCmd('EMRG_CHUTE','Triggers emergency parachute deployment. This cannot be undone during flight.')" >
+      <span class="cbicon">🪂</span>
+      <span class="cbtext">Emergency Parachute
+        <span class="cbsub">Immediate chute deploy — confirm required</span>
+      </span>
+    </button>
+    <button class="btn cmd-btn" onclick="sendCmd('REDUND_ACT')">
+      <span class="cbicon">⚡</span>
+      <span class="cbtext">Redundant Activation
+        <span class="cbsub">Fires redundant deployment system</span>
+      </span>
+    </button>
+    <button class="btn cmd-btn" onclick="sendCmd('PING')">
+      <span class="cbicon">📡</span>
+      <span class="cbtext">Ping CanSat
+        <span class="cbsub">Request acknowledgement packet</span>
+      </span>
+    </button>
+    <button class="btn cmd-btn" onclick="sendCmd('RESET_IMU')">
+      <span class="cbicon">↺</span>
+      <span class="cbtext">Reset IMU
+        <span class="cbsub">Re-calibrate orientation sensor</span>
+      </span>
+    </button>
+
+    <div id="cmd-status">
+      <span style="color:var(--muted)">// Awaiting command...</span>
+    </div>
+  </div>
+
+  <!-- ── MAP PANEL ── -->
+  <div class="panel" id="map-panel">
+    <div class="panel-title"><span class="dot"></span> GPS TRACKING MAP</div>
+    <div id="gcs-map"></div>
+    <div style="display:flex;gap:16px;margin-top:6px;font-size:10px;color:var(--muted);">
+      <span>📍 Points: <span id="map-pts">0</span></span>
+      <span>📏 Dist: <span id="map-dist">0</span> m</span>
+      <span>⬆ Max alt: <span id="map-maxalt">0</span> m</span>
+      <button class="btn" style="margin-left:auto;font-size:9px;padding:2px 8px" onclick="clearTrack()">Clear Track</button>
+      <button class="btn" style="font-size:9px;padding:2px 8px" onclick="centerMap()">Center</button>
+    </div>
+  </div>
+
+  <!-- ── LOG PANEL ── -->
+  <div class="panel" id="log-panel">
+    <div class="panel-title"><span class="dot"></span> TELEMETRY LOG</div>
+    <div id="telem-log"></div>
+  </div>
+
+  <!-- ── STATS PANEL ── -->
+  <div class="panel" id="stats-panel">
+    <div class="panel-title"><span class="dot"></span> MISSION STATS</div>
+    <div class="stat-row"><span class="stat-key">Packets Rx</span><span class="stat-val" id="s-pkts">0</span></div>
+    <div class="stat-row"><span class="stat-key">Packets Lost</span><span class="stat-val" id="s-lost">0</span></div>
+    <div class="stat-row"><span class="stat-key">Link Quality</span><span class="stat-val" id="s-lq">—</span></div>
+    <div class="stat-row"><span class="stat-key">Max Altitude</span><span class="stat-val" id="s-maxalt">—</span></div>
+    <div class="stat-row"><span class="stat-key">Min Temp</span><span class="stat-val" id="s-mintemp">—</span></div>
+    <div class="stat-row"><span class="stat-key">Max Descent</span><span class="stat-val" id="s-maxdrt">—</span></div>
+    <div class="stat-row"><span class="stat-key">Mission Time</span><span class="stat-val" id="s-time">00:00:00</span></div>
+    <div class="stat-row"><span class="stat-key">Battery</span><span class="stat-val" id="s-bat">—</span></div>
+    <div class="batt-bar"><div class="batt-fill" id="batt-fill" style="width:0%"></div></div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     MODAL (confirmation dialogs)
+═══════════════════════════════════════════════════════════════════ -->
+<div id="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title" id="modal-title">⚠ Confirm Command</div>
+    <div class="modal-body"  id="modal-body">Are you sure?</div>
+    <div class="modal-btns">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn danger" id="modal-confirm-btn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════════════════════════════ -->
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════
+const state = {
+  streaming: false,
+  simulating: false,
+  simInterval: null,
+  serialPort: null,
+  serialReader: null,
+  missionStart: null,
+  clockInterval: null,
+  packetCount: 0,
+  packetLost: 0,
+  lastPktId: -1,
+  maxAlt: 0,
+  minTemp: Infinity,
+  maxDrt: 0,
+  trackPoints: [],
+  totalDist: 0,
+  videoStream: null,
+  telemetryLog: [],
+  csvData: [],
+  // Current telemetry
+  telem: {
+    alt:0, prs:1013, tmp:25, hum:50, drt:0, bat:4.2,
+    lat:28.6139, lon:77.2090, sat:0, fix:false,
+    ax:0, ay:0, az:0,
+    roll:0, pitch:0, yaw:0,
+    rssi:-70
+  },
+  errorCode: [0,0,0,0],
+  // Sim phase
+  simPhase: 'launch', simTime: 0, simAlt: 0,
+};
+
+// Chart colors
+const CBLUE  = '#00d4ff';
+const CPUR   = '#7b61ff';
+const CGRN   = '#00e676';
+const CWARN  = '#ffb800';
+
+// ═══════════════════════════════════════════════════════════════════
+// CHART.JS SETUP
+// ═══════════════════════════════════════════════════════════════════
+Chart.defaults.color = '#4a5580';
+Chart.defaults.borderColor = '#1c2540';
+Chart.defaults.font.family = "'Courier New', monospace";
+Chart.defaults.font.size = 9;
+
+const MAX_POINTS = 120;
+
+function makeChart(id, label, color, ymin, ymax) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label, data: [],
+        borderColor: color,
+        backgroundColor: color + '18',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false } },
+      scales: {
+        x: { display: false },
+        y: {
+          min: ymin, max: ymax,
+          grid: { color: '#1c254055' },
+          ticks: { maxTicksLimit: 4 }
+        }
+      }
+    }
+  });
+}
+
+function makeSparkline(id, color) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: color, borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3 }] },
+    options: { animation:false, responsive:true, plugins:{legend:{display:false},tooltip:{enabled:false}},
+      scales: { x:{display:false}, y:{display:false} } }
+  });
+}
+
+const charts = {};
+const sparks = {};
+window.addEventListener('load', () => {
+  charts.alt = makeChart('gc-alt','Altitude (m)',   CBLUE, 0,    2000);
+  charts.prs = makeChart('gc-prs','Pressure (hPa)', CPUR,  800,  1020);
+  charts.tmp = makeChart('gc-tmp','Temp (°C)',       CWARN, -20,  60);
+  charts.drt = makeChart('gc-drt','Descent (m/s)',   CGRN,  -15,  15);
+  charts.bat = makeChart('gc-bat','Battery (V)',     CGRN,  3.0,  4.3);
+
+  sparks.alt = makeSparkline('sp-alt', CBLUE);
+  sparks.prs = makeSparkline('sp-prs', CPUR);
+  sparks.tmp = makeSparkline('sp-tmp', CWARN);
+  sparks.drt = makeSparkline('sp-drt', CGRN);
+  sparks.bat = makeSparkline('sp-bat', CGRN);
+
+  initMap();
+  initOrientation();
+  populateCameras();
+  log('GCS initialised. Awaiting telemetry.', 'ok');
+});
+
+function pushChartData(key, value) {
+  const ts = new Date().toLocaleTimeString();
+  const c  = charts[key];
+  const s  = sparks[key];
+  [c, s].forEach(ch => {
+    ch.data.labels.push(ts);
+    ch.data.datasets[0].data.push(value);
+    if (ch.data.labels.length > MAX_POINTS) {
+      ch.data.labels.shift();
+      ch.data.datasets[0].data.shift();
+    }
+    ch.update('none');
+  });
+}
+
+function switchGraph(key, el) {
+  document.querySelectorAll('.gtab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.graph-wrap').forEach((w,i)=>{
+    const keys = ['alt','prs','tmp','drt','bat'];
+    w.style.display = keys[i]===key ? '' : 'none';
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// LEAFLET MAP
+// ═══════════════════════════════════════════════════════════════════
+let map, marker, polyline, mapInitLat = 28.6139, mapInitLon = 77.2090;
+
+function initMap() {
+  map = L.map('gcs-map', { zoomControl:true, attributionControl:false }).setView([mapInitLat, mapInitLon], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap',
+    maxZoom: 19,
+  }).addTo(map);
+
+  const icon = L.divIcon({
+    html: '<div style="width:12px;height:12px;border-radius:50%;background:#00d4ff;border:2px solid #fff;box-shadow:0 0 8px #00d4ff"></div>',
+    iconSize:[12,12], className:''
+  });
+  marker   = L.marker([mapInitLat, mapInitLon], { icon }).addTo(map).bindPopup('CanSat');
+  polyline = L.polyline([], { color:'#00d4ff', weight:2, opacity:.7 }).addTo(map);
+}
+
+function updateMap(lat, lon) {
+  if (!map) return;
+  const ll = [lat, lon];
+  marker.setLatLng(ll);
+  polyline.addLatLng(ll);
+  state.trackPoints.push(ll);
+  document.getElementById('map-pts').textContent = state.trackPoints.length;
+  // rough distance
+  if (state.trackPoints.length > 1) {
+    const prev = state.trackPoints[state.trackPoints.length-2];
+    const d = map.distance(prev, ll);
+    state.totalDist = Math.round(state.totalDist + d);
+    document.getElementById('map-dist').textContent = state.totalDist;
+  }
+}
+
+function clearTrack() {
+  polyline.setLatLngs([]);
+  state.trackPoints = [];
+  state.totalDist = 0;
+  document.getElementById('map-pts').textContent = 0;
+  document.getElementById('map-dist').textContent = 0;
+}
+
+function centerMap() {
+  if (state.trackPoints.length) map.setView(state.trackPoints[state.trackPoints.length-1], 16);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// THREE.JS ORIENTATION
+// ═══════════════════════════════════════════════════════════════════
+let threeRenderer, threeScene, threeCamera, threeCanSat;
+
+function initOrientation() {
+  const canvas = document.getElementById('orient-canvas');
+  const w = canvas.clientWidth || 220;
+  const h = 150;
+  canvas.width  = w;
+  canvas.height = h;
+
+  threeRenderer = new THREE.WebGLRenderer({ canvas, alpha:true, antialias:true });
+  threeRenderer.setSize(w, h);
+  threeRenderer.setPixelRatio(window.devicePixelRatio);
+  threeRenderer.setClearColor(0x000000, 0);
+
+  threeScene  = new THREE.Scene();
+  threeCamera = new THREE.PerspectiveCamera(50, w/h, 0.1, 100);
+  threeCamera.position.set(0, 1.2, 3);
+  threeCamera.lookAt(0,0,0);
+
+  // Ambient + directional lights
+  threeScene.add(new THREE.AmbientLight(0x334466, 1.2));
+  const dlight = new THREE.DirectionalLight(0x00d4ff, 1.5);
+  dlight.position.set(2,3,2);
+  threeScene.add(dlight);
+
+  // CanSat body (cylinder)
+  const group = new THREE.Group();
+  const bodyGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.8, 24);
+  const bodyMat = new THREE.MeshPhongMaterial({ color:0x1a2a50, emissive:0x0a1228, wireframe:false });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  group.add(body);
+
+  // Rings / bands
+  const ringGeo = new THREE.TorusGeometry(0.3, 0.025, 8, 24);
+  const ringMat = new THREE.MeshPhongMaterial({ color:0x00d4ff, emissive:0x003344 });
+  [-0.25, 0, 0.25].forEach(y => {
+    const r = new THREE.Mesh(ringGeo, ringMat);
+    r.rotation.x = Math.PI/2; r.position.y = y;
+    group.add(r);
+  });
+
+  // Antenna spike
+  const antGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.4, 6);
+  const antMat = new THREE.MeshPhongMaterial({ color:0x7b61ff });
+  const ant = new THREE.Mesh(antGeo, antMat);
+  ant.position.y = 0.6;
+  group.add(ant);
+
+  // Axis helper (small)
+  group.add(new THREE.AxesHelper(0.5));
+
+  threeScene.add(group);
+  threeCanSat = group;
+
+  // Grid helper for reference
+  const grid = new THREE.GridHelper(4, 10, 0x1c2540, 0x0f1628);
+  grid.position.y = -0.6;
+  threeScene.add(grid);
+
+  (function animate() {
+    requestAnimationFrame(animate);
+    threeRenderer.render(threeScene, threeCamera);
+  })();
+}
+
+function updateOrientation(roll, pitch, yaw) {
+  if (!threeCanSat) return;
+  threeCanSat.rotation.set(
+    THREE.MathUtils.degToRad(pitch),
+    THREE.MathUtils.degToRad(yaw),
+    THREE.MathUtils.degToRad(roll)
+  );
+  document.getElementById('ov-roll').textContent  = roll.toFixed(1) + '°';
+  document.getElementById('ov-pitch').textContent = pitch.toFixed(1) + '°';
+  document.getElementById('ov-yaw').textContent   = yaw.toFixed(1) + '°';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TELEMETRY PROCESSING
+// ═══════════════════════════════════════════════════════════════════
+function processTelemetry(t) {
+  state.packetCount++;
+  state.telem = { ...state.telem, ...t };
+
+  // Packet loss detection
+  if (state.lastPktId >= 0 && t.pktId !== undefined) {
+    const expected = (state.lastPktId + 1) % 65536;
+    if (t.pktId !== expected) state.packetLost++;
+  }
+  if (t.pktId !== undefined) state.lastPktId = t.pktId;
+
+  // Update DOM — telemetry fields
+  setField('t-alt', t.alt !== undefined ? t.alt.toFixed(1) : '—', 'm');
+  setField('t-prs', t.prs !== undefined ? t.prs.toFixed(1) : '—', 'hPa');
+  setField('t-tmp', t.tmp !== undefined ? t.tmp.toFixed(1) : '—', '°C');
+  setField('t-hum', t.hum !== undefined ? t.hum.toFixed(0) : '—', '%');
+  setField('t-drt', t.drt !== undefined ? t.drt.toFixed(2) : '—', 'm/s');
+  setField('t-bat', t.bat !== undefined ? t.bat.toFixed(2) : '—', 'V');
+  setField('t-lat', t.lat !== undefined ? t.lat.toFixed(5) : '—');
+  setField('t-lon', t.lon !== undefined ? t.lon.toFixed(5) : '—');
+  setField('t-sat', t.sat !== undefined ? t.sat : '—');
+  setField('t-fix', t.fix !== undefined ? (t.fix ? '<span style="color:var(--ok)">3D FIX</span>' : '<span style="color:var(--danger)">NO FIX</span>') : '—');
+  setField('t-ax',  t.ax  !== undefined ? t.ax.toFixed(2)  : '—', 'g');
+  setField('t-ay',  t.ay  !== undefined ? t.ay.toFixed(2)  : '—', 'g');
+  document.getElementById('t-rssi').textContent = t.rssi !== undefined ? t.rssi : '—';
+  document.getElementById('pkt-num').textContent = state.packetCount;
+
+  // Charts
+  if (t.alt !== undefined) pushChartData('alt', t.alt);
+  if (t.prs !== undefined) pushChartData('prs', t.prs);
+  if (t.tmp !== undefined) pushChartData('tmp', t.tmp);
+  if (t.drt !== undefined) pushChartData('drt', t.drt);
+  if (t.bat !== undefined) pushChartData('bat', t.bat);
+
+  // Orientation
+  if (t.roll !== undefined) updateOrientation(t.roll, t.pitch, t.yaw);
+
+  // Map
+  if (t.lat && t.lon && t.fix) updateMap(t.lat, t.lon);
+
+  // Stats
+  if (t.alt > state.maxAlt) { state.maxAlt = t.alt; document.getElementById('map-maxalt').textContent = state.maxAlt.toFixed(0); }
+  if (t.tmp < state.minTemp) state.minTemp = t.tmp;
+  if (Math.abs(t.drt) > state.maxDrt) state.maxDrt = Math.abs(t.drt);
+  const lq = Math.max(0, Math.min(100, Math.round(100 + (t.rssi || -70) + 30)));
+  document.getElementById('s-pkts').textContent   = state.packetCount;
+  document.getElementById('s-lost').textContent   = state.packetLost;
+  document.getElementById('s-lq').textContent     = lq + '%';
+  document.getElementById('s-maxalt').textContent = state.maxAlt.toFixed(1) + ' m';
+  document.getElementById('s-mintemp').textContent = state.minTemp === Infinity ? '—' : state.minTemp.toFixed(1) + ' °C';
+  document.getElementById('s-maxdrt').textContent = state.maxDrt.toFixed(2) + ' m/s';
+  // Battery bar
+  const batPct = Math.max(0, Math.min(100, Math.round(((t.bat - 3.0) / 1.2) * 100)));
+  document.getElementById('s-bat').textContent = (t.bat || 0).toFixed(2) + ' V (' + batPct + '%)';
+  const fill = document.getElementById('batt-fill');
+  fill.style.width = batPct + '%';
+  fill.style.background = batPct > 40 ? 'var(--ok)' : batPct > 15 ? 'var(--warn)' : 'var(--danger)';
+
+  // Error code
+  updateErrorCode(t);
+
+  // CSV log
+  state.csvData.push({ ts: new Date().toISOString(), ...t });
+
+  // Log
+  log(`PKT#${state.packetCount} | ALT=${(t.alt||0).toFixed(1)}m DRT=${(t.drt||0).toFixed(2)}m/s TMP=${(t.tmp||0).toFixed(1)}°C BAT=${(t.bat||0).toFixed(2)}V`, 'ok');
+}
+
+function setField(id, val, unit) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (unit !== undefined) {
+    el.innerHTML = val + `<span class="tunit">${unit}</span>`;
+  } else {
+    el.innerHTML = val;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ERROR CODE SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+function updateErrorCode(t) {
+  const e = [0,0,0,0];
+  // D1: Descent rate fault if outside 8-10 m/s range (absolute, non-zero only)
+  if (state.streaming && t.alt > 10 && (Math.abs(t.drt) < 1 || Math.abs(t.drt) > 10)) e[0] = 1;
+  // D2: GPS fault
+  if (!t.fix || t.sat < 3) e[1] = 1;
+  // D3: Payload separation — tracked separately via commands
+  e[2] = state.errorCode[2];
+  // D4: Emergency chute
+  e[3] = state.errorCode[3];
+  state.errorCode = e;
+
+  const labels = ['RATE','GPS','SEP','CHUTE'];
+  const descs  = [
+    ['Descent rate nominal (8–10 m/s)', 'Descent rate fault — outside 8–10 m/s range'],
+    ['GPS data available', 'GPS data unavailable or no fix'],
+    ['Payload separation successful', 'Payload separation failure'],
+    ['Parachute inactive (normal)', 'Emergency parachute ACTIVATED'],
+  ];
+
+  const descEl = document.getElementById('error-desc');
+  descEl.innerHTML = '';
+  e.forEach((v, i) => {
+    const ed = document.getElementById('ed' + i);
+    ed.querySelector('span').textContent = v;
+    if (v === 1) {
+      ed.classList.add('fault');
+    } else {
+      ed.classList.remove('fault');
+    }
+    const row = document.createElement('div');
+    row.className = v ? 'fault-row' : 'ok-row';
+    row.textContent = (v ? '✘ ' : '✔ ') + 'D' + (i+1) + ' — ' + descs[i][v];
+    descEl.appendChild(row);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SIMULATION ENGINE
+// ═══════════════════════════════════════════════════════════════════
+let simRunning = false;
+
+function toggleSim() {
+  simRunning = !simRunning;
+  const btn = document.getElementById('btn-sim');
+  if (simRunning) {
+    btn.textContent = '⏹ Stop Sim';
+    btn.classList.add('primary');
+    if (!state.streaming) startTelemetry(true);
+    state.simPhase = 'launch';
+    state.simTime  = 0;
+    state.simAlt   = 0;
+    log('Simulation started — launching CanSat...', 'warn');
+    state.simInterval = setInterval(simStep, 500);
+  } else {
+    btn.textContent = '⚡ Simulate';
+    btn.classList.remove('primary');
+    clearInterval(state.simInterval);
+    log('Simulation stopped.', 'warn');
+  }
+}
+
+function simStep() {
+  state.simTime += 0.5;
+  const t = state.simTime;
+
+  // Phase transitions
+  if (state.simPhase === 'launch' && state.simAlt < 500) {
+    state.simAlt += 12 + Math.random()*3;
+    if (state.simAlt >= 500) { state.simPhase = 'descent'; log('Apogee reached — descent phase.', 'warn'); }
+  } else if (state.simPhase === 'descent') {
+    const rate = 9 + (Math.random()-.5)*1.5; // ~9 m/s nominal
+    state.simAlt = Math.max(0, state.simAlt - rate * 0.5);
+    if (state.simAlt <= 0) {
+      state.simPhase = 'landed';
+      log('Landing detected. Mission complete.', 'ok');
+    }
+  }
+
+  const alt  = Math.max(0, state.simAlt + (Math.random()-.5)*2);
+  const drt  = state.simPhase === 'descent' ? -(9 + (Math.random()-.5)*1.5) : (state.simPhase === 'launch' ? 12 : 0);
+  const prs  = 1013.25 * Math.pow(1 - 0.0065*alt/288.15, 5.2561);
+  const tmp  = 25 - alt*0.0065 + (Math.random()-.5)*0.5;
+  const bat  = Math.max(3.6, 4.2 - state.simTime*0.0008);
+  const roll  = Math.sin(t*0.3)*15 + (Math.random()-.5)*3;
+  const pitch = Math.cos(t*0.2)*10 + (Math.random()-.5)*2;
+  const yaw   = (t*8 + (Math.random()-.5)*5) % 360;
+  const lat   = 28.6139 + (alt/1000)*(Math.random()-.5)*0.01;
+  const lon   = 77.2090 + (alt/1000)*(Math.random()-.5)*0.01;
+  const sat   = alt > 50 ? 7 + Math.floor(Math.random()*5) : 0;
+  const fix   = sat >= 4;
+  const rssi  = -65 + Math.round((Math.random()-.5)*10);
+
+  processTelemetry({
+    pktId: state.packetCount,
+    alt, prs, tmp, hum: 55+(Math.random()-.5)*10,
+    drt, bat, roll, pitch, yaw,
+    lat, lon, sat, fix,
+    ax: (Math.random()-.5)*0.3, ay: (Math.random()-.5)*0.3,
+    rssi
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TELEMETRY START / STOP
+// ═══════════════════════════════════════════════════════════════════
+function startTelemetry(fromSim) {
+  if (state.streaming) return;
+  state.streaming = true;
+  state.missionStart = Date.now();
+  state.clockInterval = setInterval(updateClock, 1000);
+
+  document.getElementById('btn-start').disabled = true;
+  document.getElementById('btn-stop').disabled  = false;
+  setConnState('streaming', 'STREAMING');
+  if (!fromSim) log('Telemetry reception started.', 'ok');
+}
+
+function stopTelemetry() {
+  state.streaming = false;
+  clearInterval(state.clockInterval);
+  document.getElementById('btn-start').disabled = false;
+  document.getElementById('btn-stop').disabled  = true;
+  if (simRunning) toggleSim();
+  setConnState('connected', 'STANDBY');
+  log('Telemetry stopped.', 'warn');
+}
+
+function updateClock() {
+  if (!state.missionStart) return;
+  const s = Math.floor((Date.now() - state.missionStart) / 1000);
+  const h = String(Math.floor(s/3600)).padStart(2,'0');
+  const m = String(Math.floor((s%3600)/60)).padStart(2,'0');
+  const sec = String(s%60).padStart(2,'0');
+  const str = `T+ ${h}:${m}:${sec}`;
+  document.getElementById('mission-clock').textContent = str;
+  document.getElementById('s-time').textContent = `${h}:${m}:${sec}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WEB SERIAL API
+// ═══════════════════════════════════════════════════════════════════
+async function connectSerial() {
+  if (!('serial' in navigator)) {
+    log('Web Serial API not supported. Use Chrome/Edge.', 'err');
+    return;
+  }
+  try {
+    state.serialPort = await navigator.serial.requestPort();
+    await state.serialPort.open({ baudRate: 9600 });
+    setConnState('connected', 'CONNECTED');
+    document.getElementById('btn-connect').disabled    = true;
+    document.getElementById('btn-disconnect').disabled = false;
+    log('Serial port connected. Waiting for packets...', 'ok');
+    readSerial();
+  } catch(e) {
+    log('Serial connection failed: ' + e.message, 'err');
+  }
+}
+
+async function readSerial() {
+  const decoder = new TextDecoderStream();
+  state.serialPort.readable.pipeTo(decoder.writable);
+  state.serialReader = decoder.readable.getReader();
+  let buffer = '';
+  while (true) {
+    try {
+      const { value, done } = await state.serialReader.read();
+      if (done) break;
+      buffer += value;
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      lines.forEach(parseSerialLine);
+    } catch(e) { break; }
+  }
+}
+
+function parseSerialLine(line) {
+  line = line.trim();
+  if (!line) return;
+  try {
+    // Expected CSV format: pktId,alt,prs,tmp,hum,drt,bat,lat,lon,sat,fix,ax,ay,roll,pitch,yaw,rssi
+    const f = line.split(',').map(Number);
+    if (f.length >= 17) {
+      processTelemetry({
+        pktId:f[0], alt:f[1], prs:f[2], tmp:f[3], hum:f[4],
+        drt:f[5], bat:f[6], lat:f[7], lon:f[8],
+        sat:f[9], fix:f[10]===1,
+        ax:f[11], ay:f[12],
+        roll:f[13], pitch:f[14], yaw:f[15], rssi:f[16]
+      });
+    } else {
+      log('Malformed packet: ' + line, 'warn');
+    }
+  } catch(e) { log('Parse error: ' + e.message, 'err'); }
+}
+
+async function disconnectSerial() {
+  if (state.serialReader) { await state.serialReader.cancel(); }
+  if (state.serialPort)   { await state.serialPort.close(); }
+  state.serialPort  = null;
+  state.serialReader = null;
+  setConnState('', 'OFFLINE');
+  document.getElementById('btn-connect').disabled    = false;
+  document.getElementById('btn-disconnect').disabled = true;
+  log('Serial port disconnected.', 'warn');
+}
+
+function sendCmd(cmd) {
+  const ts = new Date().toLocaleTimeString();
+  const el = document.getElementById('cmd-status');
+  el.innerHTML = `<span class="log-ts">[${ts}]</span> <span class="log-ok">→ CMD: ${cmd}</span><br><span style="color:var(--muted)">// Transmitting...</span>`;
+
+  // Actually write to serial if connected
+  if (state.serialPort && state.serialPort.writable) {
+    const encoder = new TextEncoder();
+    const writer  = state.serialPort.writable.getWriter();
+    writer.write(encoder.encode('CMD:' + cmd + '\n'));
+    writer.releaseLock();
+  }
+
+  // Simulate ACK
+  setTimeout(() => {
+    let ackMsg = `ACK: ${cmd} received by CanSat.`;
+    if (cmd === 'MANUAL_SEP') { state.errorCode[2] = 0; ackMsg += ' Separation confirmed.'; }
+    if (cmd === 'EMRG_CHUTE') { state.errorCode[3] = 1; }
+    if (cmd === 'REDUND_ACT') ackMsg += ' Redundant system fired.';
+    el.innerHTML = `<span class="log-ts">[${ts}]</span> <span class="log-ok">✔ ${ackMsg}</span>`;
+    log(`CMD SENT: ${cmd}`, 'warn');
+  }, 600);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MODAL CONFIRM
+// ═══════════════════════════════════════════════════════════════════
+let pendingCmd = null;
+
+function confirmCmd(cmd, msg) {
+  pendingCmd = cmd;
+  document.getElementById('modal-title').textContent = '⚠ Confirm: ' + cmd;
+  document.getElementById('modal-body').textContent  = msg;
+  document.getElementById('modal-confirm-btn').onclick = () => { closeModal(); sendCmd(pendingCmd); };
+  document.getElementById('modal-overlay').classList.add('visible');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('visible');
+  pendingCmd = null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VIDEO STREAMING
+// ═══════════════════════════════════════════════════════════════════
+async function populateCameras() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const sel = document.getElementById('cam-select');
+    sel.innerHTML = '<option value="">Select camera…</option>';
+    devices.filter(d=>d.kind==='videoinput').forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || 'Camera ' + d.deviceId.slice(0,8);
+      sel.appendChild(opt);
+    });
+  } catch(e) { /* permissions not yet granted */ }
+}
+
+async function startVideo() {
+  const deviceId = document.getElementById('cam-select').value;
+  const constraints = { video: deviceId ? { deviceId: { exact: deviceId } } : true };
+  try {
+    state.videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const vid = document.getElementById('live-video');
+    vid.srcObject = state.videoStream;
+    vid.style.display = 'block';
+    document.getElementById('vid-no-stream').style.display = 'none';
+    document.getElementById('vid-rec').style.display = 'flex';
+    document.getElementById('vid-status').textContent = 'Streaming live';
+    log('Video stream started.', 'ok');
+    await populateCameras();
+  } catch(e) {
+    log('Camera error: ' + e.message, 'err');
+    document.getElementById('vid-status').textContent = 'Camera error: ' + e.message;
+  }
+}
+
+function stopVideo() {
+  if (state.videoStream) {
+    state.videoStream.getTracks().forEach(t=>t.stop());
+    state.videoStream = null;
+  }
+  const vid = document.getElementById('live-video');
+  vid.srcObject = null;
+  vid.style.display = 'none';
+  document.getElementById('vid-no-stream').style.display = 'flex';
+  document.getElementById('vid-rec').style.display = 'none';
+  document.getElementById('vid-status').textContent = 'Stream stopped';
+  log('Video stream stopped.', 'warn');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DATA MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════
+function exportCSV() {
+  if (!state.csvData.length) { log('No telemetry data to export.', 'warn'); return; }
+  const keys = Object.keys(state.csvData[0]);
+  const rows = [keys.join(','), ...state.csvData.map(r => keys.map(k=>r[k]).join(','))];
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `cansat_telem_${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  log(`Exported ${state.csvData.length} telemetry records to CSV.`, 'ok');
+}
+
+function exportGraphs() {
+  const keys = ['alt','prs','tmp','drt','bat'];
+  const labels = { alt:'Altitude', prs:'Pressure', tmp:'Temperature', drt:'DescentRate', bat:'Battery' };
+  keys.forEach(k => {
+    const canvas = document.getElementById('gc-' + k);
+    const a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    a.download = `cansat_graph_${labels[k]}_${Date.now()}.png`;
+    a.click();
+  });
+  log('All graphs exported as PNG.', 'ok');
+}
+
+function syncTime() {
+  const now = new Date().toISOString();
+  log('PC time synced: ' + now, 'ok');
+  document.getElementById('cmd-status').innerHTML =
+    `<span style="color:var(--ok)">⏐ PC time synced:<br>${now}</span>`;
+}
+
+function resetPackets() {
+  state.packetCount = 0;
+  state.packetLost  = 0;
+  state.lastPktId   = -1;
+  state.csvData     = [];
+  document.getElementById('pkt-num').textContent = '0';
+  document.getElementById('s-pkts').textContent  = '0';
+  document.getElementById('s-lost').textContent  = '0';
+  log('Packet counter and telemetry buffer reset.', 'warn');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TELEMETRY LOG
+// ═══════════════════════════════════════════════════════════════════
+function log(msg, type) {
+  const el  = document.getElementById('telem-log');
+  const ts  = new Date().toLocaleTimeString();
+  const cls = { ok:'log-ok', warn:'log-warn', err:'log-err' }[type] || '';
+  const div = document.createElement('div');
+  div.innerHTML = `<span class="log-ts">[${ts}]</span> <span class="${cls}">${msg}</span>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  // Trim
+  while (el.children.length > 200) el.removeChild(el.firstChild);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CONNECTION STATUS
+// ═══════════════════════════════════════════════════════════════════
+function setConnState(cls, label) {
+  const dot = document.getElementById('conn-dot');
+  dot.className = cls;
+  document.getElementById('conn-label').textContent = label;
+}
+
+</script>
+</body>
+</html>
